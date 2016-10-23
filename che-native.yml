@@ -1,0 +1,86 @@
+---
+- hosts: localhost
+  user: root
+  vars:
+    che_ip: 192.168.1.235
+    che_home: /opt/che
+    che_version: nightly
+    docker_registry_ip: 172.17.0.0/16
+
+  tasks:
+    - name: upgrade all packages
+      yum: name=* state=latest
+
+    - name: enable yum repositores from rh pool needed for docker
+      shell: subscription-manager repos --enable=rhel-7-server-extras-rpms && subscription-manager repos --enable=rhel-7-server-optional-rpms
+
+    - name: install docker and repoquery, and tar
+      yum: name=docker,tar,device-mapper-libs,device-mapper-event-libs,yum-utils state=latest
+
+    - name: open ports for Che native to work
+      firewalld: zone=public port=8080/tcp immediate=true permanent=true state=enabled
+    - firewalld: zone=public port=4401/tcp immediate=true permanent=true state=enabled
+    - firewalld: zone=public port=4403/tcp immediate=true permanent=true state=enabled
+    - firewalld: zone=public port=4411/tcp immediate=true permanent=true state=enabled
+    - firewalld: zone=public port=32768-65535/tcp immediate=true permanent=true state=enabled
+    - firewalld: zone=public port=5000/tcp immediate=true permanent=true state=enabled
+    - firewalld: permanent=true zone=trusted interface=docker0 state=enabled immediate=true
+    - firewalld: permanent=true zone=trusted port=4243/tcp immediate=true state=enabled
+    - firewalld: permanent=true zone=public port=22/tcp immediate=true state=enabled
+
+    - name: install jdk 1.8
+      yum: name=java-1.8.0-openjdk-headless state=latest
+
+    - name: get java path
+      shell: repoquery -l java-1.8.0-openjdk-headless | grep "^.*openjdk-1\.8\.0.*/jre$"
+      register: java_home
+
+    - lineinfile: dest=/root/.bash_profile regexp='^export JAVA_HOME' insertbefore='^PATH' line='export JAVA_HOME={{ java_home.stdout }}' owner=root group=root mode=0644
+    - lineinfile: dest=/root/.bash_profile regexp='^export CHE_HOME' insertbefore='^PATH' line='export CHE_HOME={{ che_home }}' owner=root group=root mode=0644
+    - lineinfile: dest=/root/.bash_profile regexp='^export CHE_DOCKER_MACHINE_HOST_EXTERNAL' insertbefore='^PATH' line='export CHE_DOCKER_MACHINE_HOST_EXTERNAL={{ che_ip }}' owner=root group=root mode=0644
+    - lineinfile: dest=/root/.bash_profile regexp='^export CHE_UTILITY_VERSION' insertbefore='^PATH' line='export CHE_UTILITY_VERSION={{ che_version }}' owner=root group=root mode=0644
+    - lineinfile: dest=/root/.bash_profile regexp='^export CHE_HOST_IP' insertbefore='^PATH' line='export CHE_HOST_IP={{ che_ip }}' owner=root group=root mode=0644
+
+    - lineinfile: dest=/etc/sysconfig/docker regexp='# INSECURE_REGISTRY=' line='INSECURE_REGISTRY=\'--iptables=false --insecure-registry {{ docker_registry_ip }}\'' owner=root group=root mode=0644
+      notify:
+      - restart docker
+
+    - service: name=docker enabled=yes
+
+    # install maven
+    - name: Download Apache Maven 
+      get_url: url=http://mirrors.ibiblio.org/apache/maven/maven-3/3.3.9/binaries/apache-maven-3.3.9-bin.tar.gz dest=/tmp/apache-maven-3.3.9-bin.tar.gz
+
+    - name: Untar Maven 
+      shell: chdir=/tmp creates=/opt/apache-maven-3.3.9 tar -zxf apache-maven-3.3.9-bin.tar.gz -C /opt
+
+    - name: Update path for maven use
+      shell: export PATH=/opt/apache-maven-3.3.9/bin:$PATH
+
+    # git clone che
+    - name: Cloning che from source
+      git: repo=https://github.com/eclipse/che dest=/tmp/che accept_hostkey=true
+
+    # maven build che
+    - name: Building che from source
+      command: /opt/apache-maven-3.3.9/bin/mvn clean install
+      environment:
+        JAVA_HOME: '{{ java_home.stdout }}'
+      args:
+        chdir: /tmp/che/assembly/assembly-main
+        creates: /tmp/che/assembly/assembly-main/target
+
+    # copy out contents of che into che_home
+    - name: Create che home firectory
+      file: path='{{ che_home }}' state=directory mode=0755
+
+    - name: Untar che into home {{ che_home }}
+      shell: chdir=/tmp/che/assembly/assembly-main/target creates='{{che_home}}'/bin tar -zxf eclipse-che-*.tar.gz -C '{{che_home}}' --strip 1
+
+    # create service and enable service for running che
+
+  handlers:
+    - name: restart docker
+      service:
+        name: docker
+        state: restarted
