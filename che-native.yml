@@ -6,7 +6,7 @@
     che_home: /opt/che
     che_version: nightly
     docker_registry_ip: 172.17.0.0/16
-
+    maven_version: 3.3.9
   tasks:
     - name: upgrade all packages
       yum: name=* state=latest
@@ -26,13 +26,12 @@
     - firewalld: zone=public port=5000/tcp immediate=true permanent=true state=enabled
     - firewalld: permanent=true zone=trusted interface=docker0 state=enabled immediate=true
     - firewalld: permanent=true zone=trusted port=4243/tcp immediate=true state=enabled
-    - firewalld: permanent=true zone=public port=22/tcp immediate=true state=enabled
 
     - name: install jdk 1.8
       yum: name=java-1.8.0-openjdk-headless state=latest
 
     - name: get java path
-      shell: repoquery -l java-1.8.0-openjdk-headless | grep "^.*openjdk-1\.8\.0.*/jre$"
+      shell: repoquery -l java-1.8.0-openjdk-headless | grep "^.*openjdk-1\.8\.0.*64/jre$"
       register: java_home
 
     - lineinfile: dest=/root/.bash_profile regexp='^export JAVA_HOME' insertbefore='^PATH' line='export JAVA_HOME={{ java_home.stdout }}' owner=root group=root mode=0644
@@ -41,7 +40,7 @@
     - lineinfile: dest=/root/.bash_profile regexp='^export CHE_UTILITY_VERSION' insertbefore='^PATH' line='export CHE_UTILITY_VERSION={{ che_version }}' owner=root group=root mode=0644
     - lineinfile: dest=/root/.bash_profile regexp='^export CHE_HOST_IP' insertbefore='^PATH' line='export CHE_HOST_IP={{ che_ip }}' owner=root group=root mode=0644
 
-    - lineinfile: dest=/etc/sysconfig/docker regexp='# INSECURE_REGISTRY=' line='INSECURE_REGISTRY=\'--iptables=false --insecure-registry {{ docker_registry_ip }}\'' owner=root group=root mode=0644
+    - lineinfile: dest=/etc/sysconfig/docker regexp='# INSECURE_REGISTRY=' line='INSECURE_REGISTRY=\'--selinux-eneabled --insecure-registry {{ docker_registry_ip }}\'' owner=root group=root mode=0644
       notify:
       - restart docker
 
@@ -49,13 +48,13 @@
 
     # install maven
     - name: Download Apache Maven 
-      get_url: url=http://mirrors.ibiblio.org/apache/maven/maven-3/3.3.9/binaries/apache-maven-3.3.9-bin.tar.gz dest=/tmp/apache-maven-3.3.9-bin.tar.gz
+      get_url: url='http://mirrors.ibiblio.org/apache/maven/maven-3/{{ maven_version }}/binaries/apache-maven-{{ maven_version }}-bin.tar.gz' dest='/tmp/apache-maven-{{ maven_version }}-bin.tar.gz'
 
     - name: Untar Maven 
-      shell: chdir=/tmp creates=/opt/apache-maven-3.3.9 tar -zxf apache-maven-3.3.9-bin.tar.gz -C /opt
+      shell: chdir=/tmp creates='/opt/apache-maven-{{ maven_version }}' tar -zxf apache-maven-'{{ maven_version }}'-bin.tar.gz -C /opt
 
     - name: Update path for maven use
-      shell: export PATH=/opt/apache-maven-3.3.9/bin:$PATH
+      shell: export PATH=/opt/apache-maven-'{{ maven_version }}'/bin:$PATH
 
     # git clone che
     - name: Cloning che from source
@@ -63,7 +62,7 @@
 
     # maven build che
     - name: Building che from source
-      command: /opt/apache-maven-3.3.9/bin/mvn clean install
+      command: '/opt/apache-maven-{{ maven_version }}/bin/mvn clean install'
       environment:
         JAVA_HOME: '{{ java_home.stdout }}'
       args:
